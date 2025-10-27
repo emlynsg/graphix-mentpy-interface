@@ -8,14 +8,20 @@ https://github.com/mentpy/mentpy
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import networkx as nx
-from graphix import Pattern, command
 from graphix.fundamentals import Plane
-from graphix.gflow import find_flow
+from graphix.gflow import find_flow, find_gflow
+from graphix.measurements import Measurement
 from graphix.opengraph import OpenGraph
+from graphix.parameter import Expression, ExpressionOrFloat
 from graphix.pauli import Pauli
 
 import mentpy as mp
+
+if TYPE_CHECKING:
+    from graphix import Pattern
 
 
 def graphix_pattern_to_mentpy(pattern: Pattern) -> mp.MBQCircuit:
@@ -24,93 +30,86 @@ def graphix_pattern_to_mentpy(pattern: Pattern) -> mp.MBQCircuit:
     Parameters
     ----------
     pattern: graphix.Pattern
-        Graphix pattern object
 
     Returns
     -------
     result: mentpy.MBQCircuit
-        MentPy MBQCircuit object
 
-    """
+    Exceptions
+    ---------
+    NotImplementedError
+        If the pattern has Expression measurements not supported by MentPy
+
+    ValueError
+        If the pattern has no flow or gflow.
+
+    """  # noqa: DOC501
     nodes, edges = pattern.get_graph()
-    g = nx.Graph()
+    g: nx.Graph[None] = nx.Graph()
     g.add_nodes_from(nodes)
     g.add_edges_from(edges)
     vin = pattern.input_nodes if pattern.input_nodes is not None else []
     vout = pattern.output_nodes
-    measurements = {}
+    measurements: dict[int, mp.Ment] = {}
     meas_planes = pattern.get_meas_plane().items()
     meas_angles = pattern.get_angles()
+    if any(isinstance(angle, Expression) for angle in meas_angles):
+        msg = "MentPy doesn't support Expression measurements."
+        raise NotImplementedError(msg)
     for i, plane in enumerate(meas_planes):
         plane_str = str(plane[1]).split(".")[1]  # convert to 'XY', 'YZ', or 'XZ' strings
         if i in vout:
             continue
-        measurements[i] = mp.Ment(meas_angles[i], plane_str)
-    return mp.MBQCircuit(g, input_nodes=vin, output_nodes=vout, measurements=measurements)
+        angle = float(meas_angles[i]) # type: ignore
+        measurements[i] = mp.Ment(angle, plane_str) # type: ignore
+    flow = find_flow(g, set(vin), set(vout), meas_planes=pattern.get_meas_plane())[0]
+    g_flow = find_gflow(g, set(vin), set(vout), meas_planes=pattern.get_meas_plane())[0]
+    if not (flow or g_flow):
+        msg = "No flow or gflow found, cannot convert to MBQCircuit."
+        raise ValueError(msg)
+    graph_state: mp.GraphState = mp.GraphState(g)  # type: ignore
+    return mp.MBQCircuit(graph_state, input_nodes=vin, output_nodes=vout, measurements=measurements)
 
 
-def mentpy_to_graphix_pattern(graph: mp.MBQCircuit) -> Pattern:
+def mentpy_to_graphix_pattern(graph_state: mp.MBQCircuit) -> Pattern:
     """Convert a MentPy MBQCircuit to a Graphix pattern.
 
     Parameters
     ----------
     graph: mentpy.MBQCircuit
-    output_generator_list = []
 
     Returns
     -------
     result: graphix.Pattern
-        Graphix pattern object
 
     """
     conversion_dict = {"XY": Plane.XY, "YZ": Plane.YZ, "XZ": Plane.XZ}
-    new_nodes: list[int] = list(graph.inputc)
-    edges: list[tuple[int, int]] = list(graph.edges)
-    input_nodes = graph.input_nodes
-    m_commands: dict[int, command.M] = {}
-    if graph.measurements is not None:
-        for node, measurement in graph.measurements.items():
-            if measurement is not None:
-                m_commands[node] = command.M(node, plane=conversion_dict[measurement.plane], angle=measurement.angle)
-    for node in graph.outputc:
-        if node not in graph.measurements:
-            m_commands[node] = command.M(node)
-    pattern = Pattern(input_nodes, None, None)
-    pattern.extend((command.N(node) for node in new_nodes), (command.E(edge) for edge in edges), (m_command for m_command in m_commands.values()))
-    return pattern
-
-# def mentpy_pauli_to_graphix_ops(generators: list[mp.operators.pauliop.PauliOp]) -> list[list[Ops]]:
-#     output_generator_list = []
-#     for generator in generators:
-#         output_generator = []
-#         generator_as_list = list(str(generator))
-#         for pauli in generator_as_list:
-#             if str(pauli) == "X":
-#                 output_generator.append(Ops.X)
-#             elif str(pauli) == "Y":
-#                 output_generator.append(Ops.Y)
-#             elif str(pauli) == "Z":
-#                 output_generator.append(Ops.Z)
-#             elif str(pauli) == "I":
-#                 output_generator.append(Ops.I)
-#             else:
-#                 raise ValueError("The element is not a Pauli")
-#         output_generator_list.append(output_generator)
-#     return output_generator_list
+    measurements: dict[int, Measurement] = {}
+    for index, measurement in graph_state.measurements.items():
+        if measurement is not None:
+            angle = measurement.angle if isinstance(measurement.angle, ExpressionOrFloat) else 0.0
+            measurements[index] = Measurement(angle, conversion_dict[measurement.plane])
+    open_graph = OpenGraph(graph_state.graph, measurements, graph_state.input_nodes, graph_state.output_nodes)
+    return open_graph.to_pattern()
 
 
 def _mentpy_pauli_to_graphix_pauli(generators: list[mp.operators.pauliop.PauliOp]) -> list[list[Pauli]]:
-    """Helper function that converts a list of MentPy Pauli operators into Graphix format.
-    
+    """Convert a list of MentPy Pauli operators into Graphix format.
+
     Parameters
     ----------
     generators: list[mentpy.operators.pauliop.PauliOp]
         List of MentPy Pauli operators
-    
+
     Returns
     -------
     result: list[list[Pauli]]
         List of list of Graphix Pauli operators
+
+    Raises
+    ------
+    ValueError
+        If the element is not a Pauli
 
     """
     output_generator_list = []
@@ -146,12 +145,33 @@ def calculate_lie_algebra(pattern: Pattern) -> list[list[Pauli]]:
     result: list[list[Pauli]]
         List of list of Graphix Pauli gates
 
+    Raises
+    ------
+    ValueError
+        If the pattern is not available in MentPy to calculate the Lie algebra
+
     """
-    og = OpenGraph.from_pattern(pattern)
-    f, _layers = find_flow(
-        og.inside, set(og.inputs), set(og.outputs), {node: meas.plane for node, meas in og.measurements.items()}
-    )
-    if f is None:
-        raise ValueError("Open Graph doesn't have flow. Flow required to generate Lie algebra.")
-    lie_algebra = mp.utils.calculate_lie_algebra(graphix_pattern_to_mentpy(pattern))
-    return _mentpy_pauli_to_graphix_pauli(lie_algebra)
+    mp_pattern = graphix_pattern_to_mentpy(pattern)
+    if mp_pattern.trainable_nodes is None:
+        msg = "The pattern is not trainable."
+        raise ValueError(msg)
+    lie_algebra = mp.utils.calculate_lie_algebra(mp_pattern)
+    return _mentpy_pauli_to_graphix_pauli(lie_algebra)  # pyright: ignore[reportArgumentType]
+
+
+def regenerate_pattern_from_open_graph(pattern: Pattern) -> Pattern:
+    """Test function to regenerate pattern from Open Graph through flow-finding algorithm.
+
+    Parameters
+    ----------
+    pattern: Pattern
+        Pattern from Graphix
+
+    Returns
+    -------
+    result: Pattern
+        Pattern from Graphix, calculated from the measurements and underlying Open Graph of the original pattern.
+
+    """
+    og_from_pattern = OpenGraph.from_pattern(pattern)
+    return og_from_pattern.to_pattern()
