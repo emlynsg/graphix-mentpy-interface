@@ -44,10 +44,8 @@ def test_check(circuit: Circuit, fx_rng: Generator) -> None:
     """Test circuit transpilation comparing state vector back-end, where a copy has been sent to MentPy and back."""
     pattern = circuit.transpile().pattern
     pattern_og = regenerate_pattern_from_open_graph(pattern)
-    pattern.standardize()
-    pattern.shift_signals()
-    pattern_og.standardize()
-    pattern_og.shift_signals()
+    pattern.minimize_space()
+    pattern_og.minimize_space()
     state_mbqc = pattern.simulate_pattern(rng=fx_rng)
     state_mbqc_og = pattern_og.simulate_pattern(rng=fx_rng)
     assert np.abs(np.dot(state_mbqc.flatten().conjugate(), state_mbqc_og.flatten())) == pytest.approx(1)
@@ -62,8 +60,7 @@ def test_circuit_simulation(circuit: Circuit, fx_rng: Generator) -> None:
     pattern_to_and_from_mentpy.shift_signals()
     pattern_to_and_from_mentpy_mbqc = pattern_to_and_from_mentpy.simulate_pattern(rng=fx_rng)
     pattern = regenerate_pattern_from_og(pattern)
-    pattern.standardize()
-    pattern.shift_signals()
+    pattern.minimize_space()
     state_mbqc = pattern.simulate_pattern(rng=fx_rng)
     assert np.abs(np.dot(state_mbqc.flatten().conjugate(), pattern_to_and_from_mentpy_mbqc.flatten())) == pytest.approx(1)
 
