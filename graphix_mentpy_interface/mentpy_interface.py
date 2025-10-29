@@ -61,7 +61,7 @@ def graphix_pattern_to_mentpy(pattern: Pattern) -> mp.MBQCircuit:
         plane_str = str(plane).split(".")[1]  # convert to 'XY', 'YZ', or 'XZ' strings
         if i in vout:
             continue
-        if angle := float(meas_angles[i]) == 0.0:
+        if angle := float(meas_angles[i]) == 0.0 and plane_str == "XY":  # This needs to be checked if using the code seriously.
             angle = None
         measurements[i] = mp.Ment(angle, plane_str)
     flow = find_flow(g, set(vin), set(vout), meas_planes=internal_pattern.get_meas_plane())[0]
@@ -94,7 +94,7 @@ def mentpy_to_graphix_pattern(graph_state: mp.MBQCircuit) -> Pattern:
     measurements: dict[int, Measurement] = {}
     for index, measurement in graph_state.measurements.items():
         if measurement is not None:
-            angle = measurement.angle if isinstance(measurement.angle, ExpressionOrFloat) else 0.0  # This may not work for some expressions but should work most of the time.
+            angle = measurement.angle if isinstance(measurement.angle, ExpressionOrFloat) else 0.0  # This may not always work.
             if measurement.plane not in conversion_dict:
                 msg = f"Measurement plane {measurement.plane} not supported."
                 raise ValueError(msg)
