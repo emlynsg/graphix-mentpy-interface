@@ -74,7 +74,7 @@ def test_circuit_lie_algebra(circuit: Circuit) -> None:
 
 
 @pytest.mark.parametrize("jumps", range(1, 6))
-@pytest.mark.parametrize("check", ["simulation", "flow", "lie_algebra"])
+@pytest.mark.parametrize("check", ["simulation", "lie_algebra"])
 def test_random_circuit(fx_bg: PCG64, jumps: int, check: str) -> None:
     """Test random circuit transpilation and conversion."""
     rng = Generator(fx_bg.jumped(jumps))

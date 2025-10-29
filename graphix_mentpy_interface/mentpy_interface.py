@@ -39,35 +39,37 @@ def graphix_pattern_to_mentpy(pattern: Pattern) -> mp.MBQCircuit:
     ---------
     NotImplementedError
         If the pattern has Expression measurements not supported by MentPy
-
     ValueError
         If the pattern has no flow or gflow.
 
-    """  # noqa: DOC501
-    nodes, edges = pattern.get_graph()
+    """
+    internal_pattern = pattern.copy()
+    internal_pattern.shift_signals()
+    nodes, edges = internal_pattern.get_graph()
     g: nx.Graph[None] = nx.Graph()
     g.add_nodes_from(nodes)
     g.add_edges_from(edges)
-    vin = pattern.input_nodes if pattern.input_nodes is not None else []
-    vout = pattern.output_nodes
+    vin = internal_pattern.input_nodes if internal_pattern.input_nodes is not None else []
+    vout = internal_pattern.output_nodes
     measurements: dict[int, mp.Ment] = {}
-    meas_planes = pattern.get_meas_plane().items()
-    meas_angles = pattern.get_angles()
+    meas_planes = internal_pattern.get_meas_plane().items()
+    meas_angles = internal_pattern.get_angles()
     if any(isinstance(angle, Expression) for angle in meas_angles):
         msg = "MentPy doesn't support Expression measurements."
         raise NotImplementedError(msg)
-    for i, plane in enumerate(meas_planes):
-        plane_str = str(plane[1]).split(".")[1]  # convert to 'XY', 'YZ', or 'XZ' strings
+    for i, plane in meas_planes:
+        plane_str = str(plane).split(".")[1]  # convert to 'XY', 'YZ', or 'XZ' strings
         if i in vout:
             continue
-        angle = float(meas_angles[i]) # type: ignore
-        measurements[i] = mp.Ment(angle, plane_str) # type: ignore
-    flow = find_flow(g, set(vin), set(vout), meas_planes=pattern.get_meas_plane())[0]
-    g_flow = find_gflow(g, set(vin), set(vout), meas_planes=pattern.get_meas_plane())[0]
+        if angle := float(meas_angles[i]) == 0.0:
+            angle = None
+        measurements[i] = mp.Ment(angle, plane_str)
+    flow = find_flow(g, set(vin), set(vout), meas_planes=internal_pattern.get_meas_plane())[0]
+    g_flow = find_gflow(g, set(vin), set(vout), meas_planes=internal_pattern.get_meas_plane())[0]
     if not (flow or g_flow):
         msg = "No flow or gflow found, cannot convert to MBQCircuit."
         raise ValueError(msg)
-    graph_state: mp.GraphState = mp.GraphState(g)  # type: ignore
+    graph_state: mp.GraphState = mp.GraphState(g)
     return mp.MBQCircuit(graph_state, input_nodes=vin, output_nodes=vout, measurements=measurements)
 
 
@@ -82,15 +84,25 @@ def mentpy_to_graphix_pattern(graph_state: mp.MBQCircuit) -> Pattern:
     -------
     result: graphix.Pattern
 
+    Exceptions
+    ---------
+    ValueError
+        If the measurement is defined on a plane or axis other than "XY", "YZ", or "XZ".
+
     """
-    conversion_dict = {"XY": Plane.XY, "YZ": Plane.YZ, "XZ": Plane.XZ}
+    conversion_dict = {"XY": Plane.XY, "YZ": Plane.YZ, "XZ": Plane.XZ, "X": Plane.XZ, "Y": Plane.YZ, "Z": Plane.XZ}
     measurements: dict[int, Measurement] = {}
     for index, measurement in graph_state.measurements.items():
         if measurement is not None:
-            angle = measurement.angle if isinstance(measurement.angle, ExpressionOrFloat) else 0.0
+            angle = measurement.angle if isinstance(measurement.angle, ExpressionOrFloat) else 0.0  # This may not work for some expressions but should work most of the time.
+            if measurement.plane not in conversion_dict:
+                msg = f"Measurement plane {measurement.plane} not supported."
+                raise ValueError(msg)
             measurements[index] = Measurement(angle, conversion_dict[measurement.plane])
     open_graph = OpenGraph(graph_state.graph, measurements, graph_state.input_nodes, graph_state.output_nodes)
-    return open_graph.to_pattern()
+    pattern = open_graph.to_pattern()
+    pattern.standardize()
+    return pattern
 
 
 def _mentpy_pauli_to_graphix_pauli(generators: list[mp.operators.pauliop.PauliOp]) -> list[list[Pauli]]:
